@@ -31,6 +31,12 @@ export class Bar3DRenderer {
     this._W = MAX_EXTENT;   // 데이터 격자에 따라 갱신됨
     this._D = MAX_EXTENT;
 
+    // 라벨 방향 계산용 재사용 임시 객체
+    this._m4 = new THREE.Matrix4();
+    this._t1 = new THREE.Vector3();
+    this._t2 = new THREE.Vector3();
+    this._t3 = new THREE.Vector3();
+
     // ---- 렌더러/씬/카메라 ----
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -132,9 +138,40 @@ export class Bar3DRenderer {
     return spr;
   }
 
+  // 축과 평행하게 회전 가능한 텍스트 평면 메시 (제목용). Sprite와 달리 3D 방향 지정 가능.
+  _makeTextPlane(text, { fontSize = 64, bold = false, worldH = 9 } = {}) {
+    const c = document.createElement('canvas');
+    const ctx = c.getContext('2d');
+    const font = `${bold ? 'bold ' : ''}${fontSize}px "Times New Roman", serif`;
+    ctx.font = font;
+    c.width = Math.ceil(ctx.measureText(text).width) + 16;
+    c.height = fontSize + 16;
+    ctx.font = font;
+    ctx.fillStyle = '#000';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    ctx.fillText(text, 8, c.height / 2);
+    const tex = new THREE.CanvasTexture(c);
+    tex.minFilter = THREE.LinearFilter;
+    tex.anisotropy = 4;
+    const geo = new THREE.PlaneGeometry((worldH * c.width) / c.height, worldH);
+    const mat = new THREE.MeshBasicMaterial({
+      map: tex, transparent: true, depthTest: false, side: THREE.DoubleSide,
+    });
+    return new THREE.Mesh(geo, mat);
+  }
+
+  // 로컬 축(text-right, text-up, normal)을 월드 basis로 지정 + 위치 설정
+  _orient(mesh, xa, ya, za, px, py, pz) {
+    this._m4.makeBasis(xa, ya, za);
+    mesh.quaternion.setFromRotationMatrix(this._m4);
+    mesh.position.set(px, py, pz);
+  }
+
   _buildAxes() {
     if (this._axesGrp) {
       this._axesGrp.traverse((o) => {
+        if (o.geometry) o.geometry.dispose();
         if (o.material) { o.material.map?.dispose(); o.material.dispose(); }
       });
       this.scene.remove(this._axesGrp);
@@ -142,9 +179,9 @@ export class Bar3DRenderer {
     const grp = new THREE.Group();
     const ax = this._axes;
 
-    this._cycleTitle = this._makeLabel(ax.x.label, { bold: true, worldH: 9 });
-    this._phaseTitle = this._makeLabel(ax.y.label, { bold: true, worldH: 9 });
-    this._ampTitle = this._makeLabel(ax.z.label, { bold: true, worldH: 8 });
+    this._cycleTitle = this._makeTextPlane(ax.x.label, { bold: true, worldH: 9 });
+    this._phaseTitle = this._makeTextPlane(ax.y.label, { bold: true, worldH: 9 });
+    this._ampTitle = this._makeTextPlane(ax.z.label, { bold: true, worldH: 8 });
 
     this._cycleTicks = ax.x.ticks.map((v) => {
       const l = this._makeLabel(String(v), { worldH: 6 });
@@ -182,15 +219,21 @@ export class Bar3DRenderer {
     wl.zPos.visible = on && sz < 0;
     wl.zNeg.visible = on && sz > 0;
 
-    // Cycle 축(x방향) → 앞쪽 바닥 모서리 (z = sz·D/2)
+    // Cycle 축(x방향) → 앞쪽 바닥 모서리 (z = sz·D/2). 제목은 세워서 X축과 평행, 정면(카메라) 보기.
     this._cycleTicks.forEach((l) => l.position.set((l.userData.t - 0.5) * W, -7, sz * (D / 2 + 9)));
-    this._cycleTitle.position.set(0, -16, sz * (D / 2 + 15));
-    // Phase 축(z방향) → 오른쪽 바닥 모서리 (x = sx·W/2)
+    this._orient(this._cycleTitle,
+      this._t1.set(sz, 0, 0), this._t2.set(0, 1, 0), this._t3.set(0, 0, sz),
+      0, -9, sz * (D / 2 + 26));
+    // Phase 축(z방향) → 오른쪽 바닥 모서리 (x = sx·W/2). 제목은 세워서 Z축과 평행, 정면(카메라) 보기.
     this._phaseTicks.forEach((l) => l.position.set(sx * (W / 2 + 11), -7, (l.userData.t - 0.5) * D));
-    this._phaseTitle.position.set(sx * (W / 2 + 17), -16, 0);
-    // Amplitude 축(수직) → 앞왼쪽 수직 모서리 (x = -sx·W/2, z = sz·D/2)
+    this._orient(this._phaseTitle,
+      this._t1.set(0, 0, -sx), this._t2.set(0, 1, 0), this._t3.set(sx, 0, 0),
+      sx * (W / 2 + 26), -9, 0);
+    // Amplitude 축(수직) → 앞왼쪽 수직 모서리. 제목은 세로로 세워 수직축과 평행 (아래→위로 읽힘).
     this._ampTicks.forEach((l) => l.position.set(-sx * (W / 2 + 10), l.userData.t * H, sz * (D / 2 + 10)));
-    this._ampTitle.position.set(-sx * (W / 2 + 20), H * 0.5, sz * (D / 2 + 16));
+    this._orient(this._ampTitle,
+      this._t1.set(0, 1, 0), this._t2.set(-sz, 0, 0), this._t3.set(0, 0, sz),
+      -sx * (W / 2 + 22), H * 0.5, sz * (D / 2 + 2));
   }
 
   // ============ 막대 (merged geometry) ============

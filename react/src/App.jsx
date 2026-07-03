@@ -4,9 +4,9 @@ import { generateSampleData } from './lib/sampleData.js';
 import { jetCssStops } from './lib/jet.js';
 
 const DENSITY = {
-  hi: { nx: 50, ny: 36, label: '50 × 36 (1,800)' },
-  mid: { nx: 50, ny: 18, label: '50 × 18 (900)' },
-  lo: { nx: 25, ny: 18, label: '25 × 18 (450)' },
+  hi: { nx: 40, ny: 40, label: '40 × 40 (1,600)' },
+  mid: { nx: 30, ny: 30, label: '30 × 30 (900)' },
+  lo: { nx: 20, ny: 20, label: '20 × 20 (400)' },
 };
 
 export default function App() {
