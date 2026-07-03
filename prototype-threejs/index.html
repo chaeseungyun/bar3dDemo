@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bar3D 프로토타입 — Three.js</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #ffffff; overflow: hidden; }
+    #app { width: 100vw; height: 100vh; display: block; }
+    #panel {
+      position: fixed; top: 12px; left: 12px; z-index: 10;
+      background: rgba(255,255,255,0.92); border: 1px solid #ddd; border-radius: 6px;
+      padding: 10px 12px; font-family: system-ui, sans-serif; font-size: 13px; color: #333;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08); width: 230px;
+    }
+    #panel label { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin: 6px 0; }
+    #panel .title { font-weight: 600; margin-bottom: 6px; }
+    #panel input[type=range] { flex: 1; }
+    #stats { color: #888; font-size: 11px; margin-top: 6px; }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="panel">
+    <div class="title">Three.js bar3D 프로토타입</div>
+    <label><span>막대 외곽선</span><input type="checkbox" id="edges" checked /></label>
+    <label><span>fill ratio</span><input type="range" id="fill" min="30" max="100" value="92" /></label>
+    <label><span>격자 밀도</span>
+      <select id="density">
+        <option value="hi">50 × 36 (1,800)</option>
+        <option value="mid" selected>50 × 18 (900)</option>
+        <option value="lo">25 × 18 (450)</option>
+      </select>
+    </label>
+    <label><span>배경 벽/그리드</span><input type="checkbox" id="walls" checked /></label>
+    <label><span>자동 회전</span><input type="checkbox" id="autorotate" /></label>
+    <div id="stats"></div>
+  </div>
+  <canvas id="app"></canvas>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+
+    // ================= 데이터 (echarts 프로토타입과 동일 생성식) =================
+    let seed = 20240703;
+    function rand() { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; }
+    function buildData(nx, ny) {
+      seed = 20240703;
+      const data = [];
+      const cx = 22, cy = 230, sx = 12, sy = 90;
+      for (let i = 0; i < nx; i++) {
+        for (let j = 0; j < ny; j++) {
+          const cycle = (i + 0.5) * (50 / nx);
+          const phase = (j + 0.5) * (360 / ny);
+          const env = Math.exp(-((cycle - cx) ** 2) / (2 * sx * sx) - ((phase - cy) ** 2) / (2 * sy * sy));
+          const noise = rand();
+          const amp = Math.min(1, Math.max(0.02, env * (0.6 + 0.4 * noise) + 0.12 * noise));
+          data.push({ i, j, cycle, phase, amp });
+        }
+      }
+      return data;
+    }
+
+    // ================= jet 컬러맵 =================
+    const JET = [[0,0,0.5],[0,0,1],[0,0.5,1],[0,1,1],[0.5,1,0.5],[1,1,0],[1,0.5,0],[1,0,0],[0.5,0,0]];
+    function jet(t) {
+      t = Math.max(0, Math.min(1, t));
+      const x = t * (JET.length - 1), i = Math.floor(x), f = x - i;
+      const a = JET[i], b = JET[Math.min(i + 1, JET.length - 1)];
+      return [a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f, a[2]+(b[2]-a[2])*f];
+    }
+
+    // ================= 월드 치수 =================
+    const W = 130, D = 130, H = 78;   // Cycle(x), Phase(z), Amplitude(y)
+
+    // ================= 씬 =================
+    const canvas = document.getElementById('app');
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setClearColor(0xffffff, 1);
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 3000);
+    camera.position.set(W * 1.5, H * 2.4, D * 1.9);
+    const controls = new OrbitControls(camera, canvas);
+    controls.target.set(0, H * 0.35, 0);
+    controls.enableDamping = true;
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.78));
+    const dir = new THREE.DirectionalLight(0xffffff, 0.7);
+    dir.position.set(1, 2, 1.2); scene.add(dir);
+    const dir2 = new THREE.DirectionalLight(0xffffff, 0.35);
+    dir2.position.set(-1, 0.6, -0.8); scene.add(dir2);
+
+    // ================= 라벨 스프라이트 =================
+    function makeLabel(text, { fontSize = 64, bold = false, worldH = 6 } = {}) {
+      const c = document.createElement('canvas'), ctx = c.getContext('2d');
+      const font = `${bold ? 'bold ' : ''}${fontSize}px "Times New Roman", serif`;
+      ctx.font = font;
+      c.width = Math.ceil(ctx.measureText(text).width) + 16;
+      c.height = fontSize + 16;
+      ctx.font = font; ctx.fillStyle = '#000'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+      ctx.fillText(text, 8, c.height / 2);
+      const tex = new THREE.CanvasTexture(c); tex.minFilter = THREE.LinearFilter; tex.anisotropy = 4;
+      const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+      spr.scale.set(worldH * c.width / c.height, worldH, 1);
+      spr.userData.aspect = c.width / c.height; spr.userData.worldH = worldH;
+      return spr;
+    }
+
+    // ================= 3면 그리드 (벽 4개 + 바닥) =================
+    function gridGeom(w, h, dw, dh) {
+      const pts = [];
+      for (let k = 0; k <= dw; k++) { const x = -w/2 + w*k/dw; pts.push(x,-h/2,0, x,h/2,0); }
+      for (let k = 0; k <= dh; k++) { const y = -h/2 + h*k/dh; pts.push(-w/2,y,0, w/2,y,0); }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+      return g;
+    }
+    const wallMat = new THREE.LineBasicMaterial({ color: 0xd0d0d0 });
+    const wallsGrp = new THREE.Group();
+    // floor
+    const floor = new THREE.LineSegments(gridGeom(W, D, 10, 10), wallMat);
+    floor.rotation.x = -Math.PI / 2; wallsGrp.add(floor);
+    // 4개의 수직 벽
+    const wallXpos = new THREE.LineSegments(gridGeom(D, H, 10, 5), wallMat); // x=+W/2 (yz면)
+    wallXpos.rotation.y = -Math.PI / 2; wallXpos.position.set(W/2, H/2, 0); wallsGrp.add(wallXpos);
+    const wallXneg = new THREE.LineSegments(gridGeom(D, H, 10, 5), wallMat); // x=-W/2
+    wallXneg.rotation.y = Math.PI / 2; wallXneg.position.set(-W/2, H/2, 0); wallsGrp.add(wallXneg);
+    const wallZpos = new THREE.LineSegments(gridGeom(W, H, 10, 5), wallMat); // z=+D/2 (xy면)
+    wallZpos.position.set(0, H/2, D/2); wallsGrp.add(wallZpos);
+    const wallZneg = new THREE.LineSegments(gridGeom(W, H, 10, 5), wallMat); // z=-D/2
+    wallZneg.position.set(0, H/2, -D/2); wallsGrp.add(wallZneg);
+    scene.add(wallsGrp);
+
+    // ================= 축 라벨 (동적 재배치용) =================
+    const cycleTitle = makeLabel('Cycle', { bold: true, worldH: 9 });
+    const phaseTitle = makeLabel('Phase(°)', { bold: true, worldH: 9 });
+    const ampTitle   = makeLabel('Relative amplitude', { bold: true, worldH: 8 });
+    const cycleTicks = [], phaseTicks = [], ampTicks = [];
+    for (let c = 0; c <= 50; c += 10) { const l = makeLabel(String(c), { worldH: 6 }); l.userData.val = c; cycleTicks.push(l); }
+    for (const p of [0, 90, 180, 270, 360]) { const l = makeLabel(String(p), { worldH: 6 }); l.userData.val = p; phaseTicks.push(l); }
+    for (let a = 0; a <= 1.0001; a += 0.2) { const l = makeLabel(a.toFixed(1), { worldH: 5.5 }); l.userData.val = a; ampTicks.push(l); }
+    const axesGrp = new THREE.Group();
+    [cycleTitle, phaseTitle, ampTitle, ...cycleTicks, ...phaseTicks, ...ampTicks].forEach(s => axesGrp.add(s));
+    scene.add(axesGrp);
+
+    // ================= 카메라 방향에 따른 벽/라벨 동적 배치 =================
+    function updateOrientation() {
+      const sx = camera.position.x >= 0 ? 1 : -1;
+      const sz = camera.position.z >= 0 ? 1 : -1;
+      const wallsOn = document.getElementById('walls').checked;
+      floor.visible = wallsOn;
+      // 카메라에서 먼 쪽 벽만 표시 (데이터 뒤에 위치)
+      wallXpos.visible = wallsOn && sx < 0;
+      wallXneg.visible = wallsOn && sx > 0;
+      wallZpos.visible = wallsOn && sz < 0;
+      wallZneg.visible = wallsOn && sz > 0;
+
+      // Cycle 축 (x방향) → 앞쪽(z = sz·D/2) 바닥 모서리
+      cycleTicks.forEach(l => l.position.set((l.userData.val/50 - 0.5) * W, -7, sz * (D/2 + 9)));
+      cycleTitle.position.set(0, -16, sz * (D/2 + 15));
+      // Phase 축 (z방향) → 오른쪽(x = sx·W/2) 바닥 모서리
+      phaseTicks.forEach(l => l.position.set(sx * (W/2 + 11), -7, (l.userData.val/360 - 0.5) * D));
+      phaseTitle.position.set(sx * (W/2 + 17), -16, 0);
+      // Amplitude 축 (수직) → 앞쪽 왼쪽 수직 모서리 (x = -sx·W/2, z = sz·D/2)
+      ampTicks.forEach(l => l.position.set(-sx * (W/2 + 10), l.userData.val * H, sz * (D/2 + 10)));
+      ampTitle.position.set(-sx * (W/2 + 20), H * 0.5, sz * (D/2 + 16));
+    }
+
+    // ================= 막대 (merged geometry) =================
+    let barsMesh = null, edgesMesh = null;
+    function buildBars(data, nx, ny, fill, showEdges) {
+      const cellW = W / nx, cellD = D / ny;
+      const barW = cellW * fill, barD = cellD * fill;
+      const barGeoms = [], edgeGeoms = [];
+      const unitEdge = showEdges ? new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)) : null;
+
+      for (const d of data) {
+        const hgt = Math.max(d.amp * H, 0.4);
+        const cx = (d.i + 0.5) / nx * W - W / 2;
+        const cz = (d.j + 0.5) / ny * D - D / 2;
+        const box = new THREE.BoxGeometry(barW, hgt, barD);
+        box.translate(cx, hgt / 2, cz);
+        const [r, g, b] = jet(d.amp);
+        const n = box.attributes.position.count;
+        const col = new Float32Array(n * 3);
+        for (let k = 0; k < n; k++) { col[k*3] = r; col[k*3+1] = g; col[k*3+2] = b; }
+        box.setAttribute('color', new THREE.BufferAttribute(col, 3));
+        barGeoms.push(box);
+        if (showEdges) {
+          const eg = unitEdge.clone();
+          eg.scale(barW, hgt, barD); eg.translate(cx, hgt / 2, cz);
+          edgeGeoms.push(eg);
+        }
+      }
+      const merged = mergeGeometries(barGeoms, false);
+      barGeoms.forEach(g => g.dispose());
+      barsMesh = new THREE.Mesh(merged, new THREE.MeshLambertMaterial({ vertexColors: true }));
+      scene.add(barsMesh);
+      if (showEdges && edgeGeoms.length) {
+        const em = mergeGeometries(edgeGeoms, false);
+        edgeGeoms.forEach(g => g.dispose());
+        edgesMesh = new THREE.LineSegments(em, new THREE.LineBasicMaterial({ color: 0x222222 }));
+        scene.add(edgesMesh);
+      }
+    }
+
+    function rebuild() {
+      if (barsMesh) { scene.remove(barsMesh); barsMesh.geometry.dispose(); barsMesh.material.dispose(); barsMesh = null; }
+      if (edgesMesh) { scene.remove(edgesMesh); edgesMesh.geometry.dispose(); edgesMesh.material.dispose(); edgesMesh = null; }
+      const map = { hi: [50, 36], mid: [50, 18], lo: [25, 18] };
+      const [nx, ny] = map[document.getElementById('density').value];
+      const fill = parseInt(document.getElementById('fill').value, 10) / 100;
+      const showEdges = document.getElementById('edges').checked;
+      const t0 = performance.now();
+      buildBars(buildData(nx, ny), nx, ny, fill, showEdges);
+      document.getElementById('stats').textContent =
+        `${nx}×${ny} = ${nx*ny} bars · build ${(performance.now()-t0).toFixed(0)}ms`;
+    }
+
+    document.getElementById('edges').addEventListener('change', rebuild);
+    document.getElementById('fill').addEventListener('input', rebuild);
+    document.getElementById('density').addEventListener('change', rebuild);
+    document.getElementById('walls').addEventListener('change', updateOrientation);
+    document.getElementById('autorotate').addEventListener('change', e => {
+      controls.autoRotate = e.target.checked; controls.autoRotateSpeed = 1.2;
+    });
+
+    function resize() {
+      const w = window.innerWidth, h = window.innerHeight;
+      renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+    }
+    window.addEventListener('resize', resize);
+    resize();
+    rebuild();
+
+    function loop() {
+      requestAnimationFrame(loop);
+      controls.update();
+      updateOrientation();
+      renderer.render(scene, camera);
+    }
+    loop();
+  </script>
+</body>
+</html>
