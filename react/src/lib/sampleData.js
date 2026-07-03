@@ -28,3 +28,17 @@ export function generateSampleData(nx = 50, ny = 36) {
   }
   return values;
 }
+
+// 실시간 데모용: 현재 값을 조금씩 흔들되(base 언덕 형태로 약하게 회귀) 다음 프레임 데이터를 만든다.
+//   cur:  현재 number[ny][nx]
+//   base: 기준 언덕 number[ny][nx] (generateSampleData 결과) — 형태 유지용
+//   pull: base로 회귀하는 강도, jitter: 무작위 흔들림 크기
+export function evolveData(cur, base, { pull = 0.12, jitter = 0.22 } = {}) {
+  return cur.map((row, j) =>
+    row.map((v, i) => {
+      const target = base?.[j]?.[i] ?? v;
+      const next = v + (target - v) * pull + (Math.random() - 0.5) * jitter;
+      return Math.min(1, Math.max(0, next));
+    })
+  );
+}

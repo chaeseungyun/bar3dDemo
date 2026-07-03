@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Bar3DChart from './Bar3DChart.jsx';
-import { generateSampleData } from './lib/sampleData.js';
+import { generateSampleData, evolveData } from './lib/sampleData.js';
 import { jetCssStops } from './lib/jet.js';
 
 const DENSITY = {
@@ -8,16 +8,39 @@ const DENSITY = {
   mid: { nx: 30, ny: 30, label: '30 × 30 (900)' },
   lo: { nx: 20, ny: 20, label: '20 × 20 (400)' },
 };
+const TICK_MS = 800; // 데이터 갱신 주기 (화면은 60fps로 보간)
+const LERP = 0.06;   // 프레임당 목표 접근 비율 (작을수록 천천히 부드럽게)
 
 export default function App() {
   const [density, setDensity] = useState('mid');
   const [fillRatio, setFillRatio] = useState(0.92);
-  const [showEdges, setShowEdges] = useState(false);
   const [showWalls, setShowWalls] = useState(true);
   const [autoRotate, setAutoRotate] = useState(false);
+  const [animate, setAnimate] = useState(false);
 
   const { nx, ny } = DENSITY[density];
-  const data = useMemo(() => generateSampleData(nx, ny), [nx, ny]);
+  const baseRef = useRef(null);
+  const [data, setData] = useState(() => {
+    const d = generateSampleData(DENSITY.mid.nx, DENSITY.mid.ny);
+    baseRef.current = d;
+    return d;
+  });
+
+  // 격자 밀도 변경 → 데이터/기준 언덕 재생성
+  useEffect(() => {
+    const d = generateSampleData(nx, ny);
+    baseRef.current = d;
+    setData(d);
+  }, [nx, ny]);
+
+  // 실시간 애니메이션: 일정 주기로 데이터를 흔들어 setData → 엔진이 부드럽게 보간
+  useEffect(() => {
+    if (!animate) return;
+    const id = setInterval(() => {
+      setData((prev) => evolveData(prev, baseRef.current, { pull: 0.1, jitter: 0.12 }));
+    }, TICK_MS);
+    return () => clearInterval(id);
+  }, [animate]);
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: '#fff' }}>
@@ -25,9 +48,9 @@ export default function App() {
         data={data}
         valueRange={[0, 1]}
         fillRatio={fillRatio}
-        showEdges={showEdges}
         showWalls={showWalls}
         autoRotate={autoRotate}
+        lerp={LERP}
         axes={{
           x: { label: 'Cycle', ticks: [0, 10, 20, 30, 40, 50], min: 0, max: 50 },
           y: { label: 'Phase(°)', ticks: [0, 90, 180, 270, 360], min: 0, max: 360 },
@@ -38,8 +61,8 @@ export default function App() {
       <div style={panelStyle}>
         <div style={{ fontWeight: 600, marginBottom: 6 }}>Bar3DChart (React)</div>
         <label style={rowStyle}>
-          <span>막대 외곽선</span>
-          <input type="checkbox" checked={showEdges} onChange={(e) => setShowEdges(e.target.checked)} />
+          <span>실시간 애니메이션</span>
+          <input type="checkbox" checked={animate} onChange={(e) => setAnimate(e.target.checked)} />
         </label>
         <label style={rowStyle}>
           <span>fill ratio</span>

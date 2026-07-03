@@ -9,20 +9,22 @@ import { Bar3DRenderer } from './lib/Bar3DRenderer.js';
  *   data        number[ny][nx]  — 행=y(phase), 열=x(cycle), 값=높이/색
  *   valueRange  [min, max]      — 색/높이 정규화 범위 (생략 시 자동)
  *   fillRatio   number 0~1      — 막대 굵기(1=빈틈 0)
- *   showEdges   boolean         — 막대 검은 외곽선
  *   showWalls   boolean         — 배경 벽/그리드
  *   autoRotate  boolean         — 자동 회전
- *   axes        { x, y, z }     — 축 라벨/눈금/범위 (Bar3DRenderer 참고)
+ *   lerp        number 0~1      — 데이터 변경 시 목표로 접근하는 프레임당 비율(부드러움)
+ *   axes        { x, y, z }     — 축 라벨/눈금/범위
  *   colorFn     (t)=>[r,g,b]    — 컬러맵 (기본 jet)
  *   className, style            — 컨테이너 스타일 (크기는 여기서 지정)
+ *
+ * data를 같은 격자 크기로 계속 바꿔주면 엔진이 매 프레임 부드럽게 보간해 실시간 애니메이션이 된다.
  */
 export default function Bar3DChart({
   data,
   valueRange = null,
   fillRatio = 0.92,
-  showEdges = true,
   showWalls = true,
   autoRotate = false,
+  lerp = 0.15,
   axes,
   colorFn,
   className,
@@ -31,10 +33,9 @@ export default function Bar3DChart({
   const canvasRef = useRef(null);
   const engineRef = useRef(null);
 
-  // 최초 mount: 엔진 생성 / unmount: 정리
   useEffect(() => {
     const engine = new Bar3DRenderer(canvasRef.current, {
-      fillRatio, showEdges, showWalls, colorFn, axes,
+      fillRatio, showWalls, colorFn, axes, lerp,
     });
     engineRef.current = engine;
     engine.resize();
@@ -52,12 +53,11 @@ export default function Bar3DChart({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // prop 변경 → 엔진에 반영
   useEffect(() => { engineRef.current?.setData(data, valueRange); }, [data, valueRange]);
   useEffect(() => { engineRef.current?.setFillRatio(fillRatio); }, [fillRatio]);
-  useEffect(() => { engineRef.current?.setShowEdges(showEdges); }, [showEdges]);
   useEffect(() => { engineRef.current?.setShowWalls(showWalls); }, [showWalls]);
   useEffect(() => { engineRef.current?.setAutoRotate(autoRotate); }, [autoRotate]);
+  useEffect(() => { engineRef.current?.setLerp(lerp); }, [lerp]);
   useEffect(() => { if (axes) engineRef.current?.setAxes(axes); }, [axes]);
 
   return (
